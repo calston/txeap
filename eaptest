@@ -1,0 +1,5 @@
+User-Name = "test3"
+Cleartext-Password = "secret"
+EAP-Type-Identity = "test3"
+EAP-Code = Response
+EAP-Id = 210
