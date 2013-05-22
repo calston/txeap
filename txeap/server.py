@@ -3,6 +3,68 @@ from pyrad import dictionary, packet, curved, server
 import os
 import hmac
 import struct
+import uuid
+import hashlib
+
+EAPRequest = 1
+EAPResponse = 2 
+EAPSuccess = 3 
+EAPFail = 4 
+
+class EAPMessage(object):
+    eap_code = 0 
+    eap_type = 0
+    eap_id = 0
+
+    def __init__(self, pkt, secret, data=None):
+        self.pkt = pkt
+        self.secret = secret
+
+        if data:
+            self.decodeEAPMessage(data)
+
+    def createReplyPacket(self, data):
+        "Build a reply packet for this message"
+        reply=self.pkt.CreateReply()
+        print reply
+        reply.source=self.pkt.source
+        reply.secret=self.secret
+        reply.code = self.packet_type
+
+        print "EAPR", repr(self.encodeEAPMessage(data))
+        reply.AddAttribute('EAP-Message', self.encodeEAPMessage(data))
+        reply.AddAttribute('Message-Authenticator', self.encodeEAPMessage(data))
+
+        return reply.ReplyPacket()
+
+    def decodeMessage(self, data):
+        "Decode this EAP message type"
+        pass
+
+    def decodeEAPMessage(self, data):
+        self.eap_code, self.eap_id, eap_len = struct.unpack('!BBH', data[:4])
+        eap_data = data[4:]
+        return self.decodeMessage(eap_data)
+
+    def encodeEAPMessage(self, data):
+        l = len(data)+4
+        pkt_hdr = struct.pack('!BBH', self.eap_code, self.eap_id, l)
+        return pkt_hdr + data
+
+
+class EAPMD5ChallengeRequest(EAPMessage):
+    eap_code = 1
+    eap_type = 4
+    eap_id = 1
+    packet_type = packet.AccessChallenge
+
+    def createPacket(self):
+        self.randstr = uuid.uuid1().bytes
+        data_hdr = struct.pack('!BB', self.eap_type, 16)
+        data = hashlib.md5(self.randstr).digest()
+        
+        return self.createReplyPacket(data_hdr + data)
+
 
 class RadiusServer(curved.RADIUSAccess):
     def __init__(self, config):
@@ -22,7 +84,6 @@ class RadiusServer(curved.RADIUSAccess):
         mydict = dictionary.Dictionary(
             os.path.join(cwd, 'dictionary')
         )
-
 
         curved.RADIUS.__init__(self, hosts=hosts, dict=mydict)
 
@@ -46,26 +107,30 @@ class RadiusServer(curved.RADIUSAccess):
             eapm = pdict.get('EAP-Message', None)
             user = pdict.get('User-Name', None)
 
+            rp = self.createReplyPacket(packet.AccessReject, pkt)
+
             if eapm:
-                eap_code, eap_id, eap_len = struct.unpack('!BBH', eapm[:4])
-                eap_data = eapm[4:]
-                if eap_code == 1:
-                    # Request
+                message = EAPMessage(pkt, self.secret, data=eapm)
 
-                if eap_code == 2:
-                    # Response
+                # This useless pyrad module doesn't even have a way to sanely authenticate requests
 
-                if eap_code == 3:
-                    # Success
+                if message.eap_code == EAPRequest:
+                    pass
 
-                if eap_code == 4:
-                    # Fail
+                if message.eap_code == EAPResponse:
+                    print "EAP Response", repr(eapm)
+                    rp = self.processEAPResponse(message)
+                    print "Send", repr(rp)
 
+                if message.eap_code == EAPSuccess:
+                    pass
+
+                if message.eap_code == EAPFail:
+                    pass
             
-            self.transport.write(   
-                self.createReplyPacket(
-                    packet.AccessAccept, 
-                    pkt
-                ), 
-                pkt.source
-            )
+            self.transport.write(rp, pkt.source)
+
+    def processEAPResponse(self, message):
+        r = EAPMD5ChallengeRequest(message.pkt, self.secret)
+
+        return r.createPacket()
