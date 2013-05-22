@@ -1,4 +1,6 @@
-from pyrad import dictionary, packet, curved, server
+from twisted.internet import protocol
+
+from txeap import packet
 
 import os
 import hmac
@@ -65,20 +67,11 @@ class EAPMD5ChallengeRequest(EAPMessage):
         
         return self.createReplyPacket(data_hdr + data)
 
-
-class RadiusServer(curved.RADIUSAccess):
+class RadiusServer(protocol.DatagramProtocol):
     def __init__(self, config):
         self.config = config
         self.secret = config['secret']
         
-        hosts = {}
-        for host in config.get('hosts', ['127.0.0.1']):
-            hosts[host] = server.RemoteHost(
-                host,
-                self.secret,
-                host
-            )
-
         cwd = os.path.dirname(__file__)
 
         mydict = dictionary.Dictionary(
@@ -86,6 +79,10 @@ class RadiusServer(curved.RADIUSAccess):
         )
 
         curved.RADIUS.__init__(self, hosts=hosts, dict=mydict)
+
+    def datagramReceived(self, datagram, hp):
+        packet = packet.RadiusPacket(datagram=datagramA)
+        self.proccessPacket(packet)
 
     def createReplyPacket(self, code, pkt):
         reply=pkt.CreateReply()
