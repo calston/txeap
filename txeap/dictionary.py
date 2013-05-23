@@ -27,6 +27,13 @@ class Transcoders(object):
 
         return struct.unpack('!I', val)[0]
 
+def reverseDict(d):
+    newd={}
+    for k,v in d.items():
+        attr_name, decoder = v
+        newd[attr_name] = k
+    return newd
+
 decoders = Transcoders()
 
 SimpleDict = {

@@ -27,11 +27,7 @@ class EAPMessage(object):
 
     def createReplyPacket(self, data):
         "Build a reply packet for this message"
-        reply=self.pkt.CreateReply()
-        print reply
-        reply.source=self.pkt.source
-        reply.secret=self.secret
-        reply.code = self.packet_type
+        reply = packet.RadiusPacket(self.packet_type, secret=self.secret)
 
         print "EAPR", repr(self.encodeEAPMessage(data))
         reply.AddAttribute('EAP-Message', self.encodeEAPMessage(data))
@@ -73,6 +69,7 @@ class RadiusServer(protocol.DatagramProtocol):
         self.secret = config['secret']
 
     def datagramReceived(self, datagram, hp):
+        print repr(datagram)
         pkt = packet.RadiusPacket(datagram=datagram)
         print pkt.attributes
         self.processPacket(pkt)

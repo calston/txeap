@@ -1,4 +1,5 @@
 import struct
+import hashlib
 
 from txeap import dictionary
 
@@ -17,10 +18,12 @@ CoARequest = 43
 CoAACK = 44
 CoANAK = 45
 
-class RadiusPacket(object):
-    # Lets do this less insanely
+class InvalidAttribute(Exception):
+    "Invalid attribute exception"
 
-    def __init__(self, code=1, id=1, datagram=None, dictionary=dictionary.SimpleDict):
+class RadiusPacket(object):
+    def __init__(self, code=1, id=1, secret=None, 
+                 datagram=None, dict=dictionary.SimpleDict):
         # Non decoded attributes
         self.raw_attributes = {}
         # decoded attributes
@@ -29,8 +32,10 @@ class RadiusPacket(object):
         self.rad_code = code
         self.rad_id = id
         self.rad_auth = None
+        self.secret = secret
 
-        self.dictionary = dictionary
+        self.dictionary = dict
+        self.reverse_dictionary = dictionary.reverseDict(dict)
 
         self.datagram = datagram
 
@@ -38,35 +43,66 @@ class RadiusPacket(object):
             self.decodeDatagram()
 
     def getDecoder(self, key):
+        "Return a decoder function for this key from the dictionary"
         decoder = self.dictionary.get(key, None)
         if not decoder:
             return lambda x: x
         return decoder[1]
 
     def getAttributeName(self, key):
+        "Return the attribute name for key id"
         return self.dictionary.get(key,[key])[0]
 
+    def getAttributeId(self, keyname):
+        return self.reverse_dictionary.get(keyname, None)
+
     def get(self, key, default=[None]):
+        "Return the decoded value for a key by its attribute name"
         return self.attributes.get(key, default)
 
-    def addAttribute(self, key, value):
-        # Store the raw attribute
+    def _addRawAttribute(self, key, value):
         if key in self.raw_attributes:
             self.raw_attributes[key].append(value)
         else:
             self.raw_attributes[key] = [value]
 
-        # Get the attribute name and decoder for this key id
-        name = self.getAttributeName(key)
-        d_val = self.getDecoder(key)(value)
-
-        # Store pretty attribute list
-        if name in self.attributes:
-            self.attributes[name].append(d_val)
+    def _addAttribute(self, key, value):
+        if key in self.attributes:
+            self.attributes[key].append(value)
         else:
-            self.attributes[name] = [d_val]
+            self.attributes[key] = [value]
+
+    def addAttribute(self, key, value):
+        "Add a attribute to this packet"
+
+        if isinstance(key, int):
+            # Store the raw attribute
+            self._addRawAttribute(key, value)
+
+            # Get the attribute name and decoder for this key id
+            name = self.getAttributeName(key)
+            if not name:
+                raise InvalidAttribute(
+                    "Attribute '%s' not found in local dictionary" % key)
+
+            d_val = self.getDecoder(key)(value)
+
+            # Store pretty attribute list
+            self._addAttribute(name, d_val)
+        else:
+            # Assume this needs encoding
+            self._addAttribute(key, value)
+
+            id = self.getAttributeId(key)
+            if not id:
+                raise InvalidAttribute(
+                    "Attribute '%s' not found in local dictionary" % key)
+
+            r_val = self.getDecoder(id)(value, en=True)
+            self._addRawAttribute(id, r_val)
 
     def decodeDatagram(self):
+        "Decodes a datagram and configures this packet object appropriately"
         header = self.datagram[:20]
         (
             self.rad_code, self.rad_id, length, self.rad_auth
@@ -82,3 +118,30 @@ class RadiusPacket(object):
 
             buffer = buffer[val_len:]
 
+    def encodeHeader(self, length, authenticator):
+        return struct.pack('!BBH16s', 
+            self.rad_code, 
+            self.rad_id, 
+            length,
+            authenticator
+        )
+
+    def encodeDatagram(self):
+        "Return a datagram for this packet"
+        # Encode attributes
+        attributes = ""
+        for k,v in self.raw_attributes.items():
+            for attr in v:
+                attr_hdr = struct.pack('!BB', k, len(attr)+2)
+                attributes += attr_hdr + attr
+
+        length = 20+len(attributes)
+        
+        if not self.rad_auth:
+            # Create null authenticator header
+            null_header = self.encodeHeader(length, "\x00"*16)
+            # Create real hash
+            s = hashlib.md5(null_header + attributes + self.secret).digest()
+            self.rad_auth = s 
+
+        return self.encodeHeader(length, self.rad_auth) + attributes
