@@ -71,40 +71,20 @@ class RadiusServer(protocol.DatagramProtocol):
     def __init__(self, config):
         self.config = config
         self.secret = config['secret']
-        
-        cwd = os.path.dirname(__file__)
-
-        mydict = dictionary.Dictionary(
-            os.path.join(cwd, 'dictionary')
-        )
-
-        curved.RADIUS.__init__(self, hosts=hosts, dict=mydict)
 
     def datagramReceived(self, datagram, hp):
-        packet = packet.RadiusPacket(datagram=datagramA)
-        self.proccessPacket(packet)
-
-    def createReplyPacket(self, code, pkt):
-        reply=pkt.CreateReply()
-        print reply
-        reply.source=pkt.source
-        reply.secret=self.secret
-        reply.code = code
-        return reply.ReplyPacket()
+        pkt = packet.RadiusPacket(datagram=datagram)
+        print pkt.attributes
+        self.processPacket(pkt)
 
     def processPacket(self, pkt):
-        if pkt.code == packet.AccessRequest:
-            pdict = {}
-            for attr in pkt.keys():
-                pdict[attr] = pkt[attr][0]
+        if pkt.rad_code == packet.AccessRequest:
 
-            print pdict
+            mac = pkt.get('Message-Authenticator')[0]
+            eapm = pkt.get('EAP-Message')[0]
+            user = pkt.get('User-Name')[0]
 
-            mac = pdict.get('Message-Authenticator', None)
-            eapm = pdict.get('EAP-Message', None)
-            user = pdict.get('User-Name', None)
-
-            rp = self.createReplyPacket(packet.AccessReject, pkt)
+            rp = packet.RadiusPacket(packet.AccessReject)
 
             if eapm:
                 message = EAPMessage(pkt, self.secret, data=eapm)
