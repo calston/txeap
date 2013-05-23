@@ -1,5 +1,6 @@
 import struct
 import hashlib
+import uuid
 
 from txeap import dictionary
 
@@ -22,7 +23,7 @@ class InvalidAttribute(Exception):
     "Invalid attribute exception"
 
 class RadiusPacket(object):
-    def __init__(self, code=1, id=1, secret=None, 
+    def __init__(self, code=1, id=1, auth=None,
                  datagram=None, dict=dictionary.SimpleDict):
         # Non decoded attributes
         self.raw_attributes = {}
@@ -31,8 +32,12 @@ class RadiusPacket(object):
 
         self.rad_code = code
         self.rad_id = id
-        self.rad_auth = None
-        self.secret = secret
+
+        if auth:
+            self.rad_auth = auth
+        else:
+            # Worlds laziest PRG 
+            self.rad_auth = hashlib.md5(uuid.uuid1().bytes).digest()
 
         self.dictionary = dict
         self.reverse_dictionary = dictionary.reverseDict(dict)
@@ -41,6 +46,11 @@ class RadiusPacket(object):
 
         if self.datagram:
             self.decodeDatagram()
+
+    def createReply(self, code=1):
+        "Return a configured reply packet for this packet of type 'code'"
+        return RadiusPacket(code, self.rad_id, self.rad_auth, 
+                            dict=self.dictionary)
 
     def getDecoder(self, key):
         "Return a decoder function for this key from the dictionary"
@@ -56,7 +66,7 @@ class RadiusPacket(object):
     def getAttributeId(self, keyname):
         return self.reverse_dictionary.get(keyname, None)
 
-    def get(self, key, default=[None]):
+    def get(self, key, default=None):
         "Return the decoded value for a key by its attribute name"
         return self.attributes.get(key, default)
 
@@ -126,7 +136,7 @@ class RadiusPacket(object):
             authenticator
         )
 
-    def encodeDatagram(self):
+    def encodeDatagram(self, secret):
         "Return a datagram for this packet"
         # Encode attributes
         attributes = ""
@@ -137,11 +147,9 @@ class RadiusPacket(object):
 
         length = 20+len(attributes)
         
-        if not self.rad_auth:
-            # Create null authenticator header
-            null_header = self.encodeHeader(length, "\x00"*16)
-            # Create real hash
-            s = hashlib.md5(null_header + attributes + self.secret).digest()
-            self.rad_auth = s 
+        # Create first authenticator header
+        first_header = self.encodeHeader(length, self.rad_auth)
+        # Create real hash
+        s = hashlib.md5(first_header + attributes + secret).digest()
 
-        return self.encodeHeader(length, self.rad_auth) + attributes
+        return self.encodeHeader(length, s) + attributes

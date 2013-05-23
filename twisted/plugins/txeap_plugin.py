@@ -26,10 +26,9 @@ class ServiceMaker(object):
     def makeService(self, options):
         config = ConfigParser.SafeConfigParser()
         config.read(options['config'])
-        config = dict(config.items('main'))
 
         return internet.UDPServer(
-            int(options["port"]), 
+            int(options['port']), 
             txeap.createService(config)
         )
 

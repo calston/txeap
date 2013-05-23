@@ -11,6 +11,31 @@ EAPResponse = 2
 EAPSuccess = 3 
 EAPFail = 4 
 
+class EAPProcessor(object):
+    def __init__(self, server):
+        self.server = server
+
+    def processMessage(self, pkt, host):
+        # Long EAP messages are sent as multiple attributes so just join them
+        eap_data = ''.join(pkt.get('EAP-Message'))
+
+        message = EAPMessage(pkt, self.server.secret, data=eap_data)
+
+        if message.eap_code == EAPRequest:
+            pass
+
+        if message.eap_code == EAPResponse:
+            print "EAP Response", repr(eapm)
+            rp = self.processEAPResponse(message)
+            print "Send", repr(rp)
+
+        if message.eap_code == EAPSuccess:
+            pass
+
+        if message.eap_code == EAPFail:
+            pass
+
+
 class EAPMessage(object):
     eap_code = 0 
     eap_type = 0

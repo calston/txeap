@@ -1,48 +1,46 @@
 from twisted.internet import protocol
 
-from txeap import packet, eap
+from txeap import packet, eap, backends
 
 
 class RadiusServer(protocol.DatagramProtocol):
     def __init__(self, config):
         self.config = config
-        self.secret = config['secret']
+        self.secret = config.get('main', 'secret')
+
+        # Special processors
+        self.eapProcessor = eap.EAPProcessor(self)
+        
+        # Setup all available auth backends
+        self.registeredBackends = []
+        for b in backends.backends:
+            self.registeredBackends.append(
+                b(config)
+            )
 
     def datagramReceived(self, datagram, hp):
-        print repr(datagram)
+        "Creates a packet object for received datagrams"
         pkt = packet.RadiusPacket(datagram=datagram)
-        print pkt.attributes
-        self.processPacket(pkt)
+        self.processPacket(pkt, hp)
 
-    def processPacket(self, pkt):
+    def processPacket(self, pkt, host):
         if pkt.rad_code == packet.AccessRequest:
+            rp = pkt.createReply(packet.AccessReject)
 
-            mac = pkt.get('Message-Authenticator')[0]
-            eapm = pkt.get('EAP-Message')[0]
-            user = pkt.get('User-Name')[0]
+            ma = pkt.get('Message-Authenticator')
+            # Do something with the MA
 
-            rp = packet.RadiusPacket(packet.AccessReject)
-
+            # Hand packet off to EAP if we have the attribute
+            eapm = pkt.get('EAP-Message')
+            print eapm
             if eapm:
-                message = EAPMessage(pkt, self.secret, data=eapm)
-
-                # This useless pyrad module doesn't even have a way to sanely authenticate requests
-
-                if message.eap_code == EAPRequest:
-                    pass
-
-                if message.eap_code == EAPResponse:
-                    print "EAP Response", repr(eapm)
-                    rp = self.processEAPResponse(message)
-                    print "Send", repr(rp)
-
-                if message.eap_code == EAPSuccess:
-                    pass
-
-                if message.eap_code == EAPFail:
-                    pass
-            
-            self.transport.write(rp, pkt.source)
+                rp = self.eapProcessor.processMessage(pkt, host)
+    
+            # Encode and write the response
+            self.transport.write(
+                rp.encodeDatagram(self.secret), 
+                host
+            )
 
     def processEAPResponse(self, message):
         r = EAPMD5ChallengeRequest(message.pkt, self.secret)
