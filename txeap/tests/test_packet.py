@@ -17,13 +17,13 @@ class Tests(unittest.TestCase):
         self.assertEqual(p.get('NAS-IP-Address'), ['127.0.0.1'])
 
     def test_encode_packet(self):
-        p = packet.RadiusPacket(1, 33, secret='testpass')
+        p = packet.RadiusPacket(1, 33)
 
         pwstring = 'u\x9dw8\x81\xe9\xcfXb\xdb\x152\x9bR\xef\xf5'
         p.addAttribute('User-Name', 'testuser')
         p.addAttribute('User-Password', pwstring)
 
-        raw_packet = p.encodeDatagram()
+        raw_packet = p.encodeDatagram('testpass')
 
         newp = packet.RadiusPacket(datagram=raw_packet)
         self.assertEqual(p.get('User-Name'), ['testuser'])

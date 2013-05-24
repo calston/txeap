@@ -20,29 +20,25 @@ class RadiusServer(protocol.DatagramProtocol):
 
     def datagramReceived(self, datagram, hp):
         "Creates a packet object for received datagrams"
+        print hp, repr(datagram)
         pkt = packet.RadiusPacket(datagram=datagram)
         self.processPacket(pkt, hp)
 
     def processPacket(self, pkt, host):
+        print host, pkt.attributes
         if pkt.rad_code == packet.AccessRequest:
             rp = pkt.createReply(packet.AccessReject)
 
             ma = pkt.get('Message-Authenticator')
             # Do something with the MA
 
-            # Hand packet off to EAP if we have the attribute
+            # Hand packet off to EAP if we have the message attribute
             eapm = pkt.get('EAP-Message')
-            print eapm
             if eapm:
                 rp = self.eapProcessor.processMessage(pkt, host)
-    
+
             # Encode and write the response
             self.transport.write(
                 rp.encodeDatagram(self.secret), 
                 host
             )
-
-    def processEAPResponse(self, message):
-        r = EAPMD5ChallengeRequest(message.pkt, self.secret)
-
-        return r.createPacket()

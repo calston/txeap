@@ -82,6 +82,22 @@ class RadiusPacket(object):
         else:
             self.attributes[key] = [value]
 
+    def setAttribute(self, key, value):
+        if isinstance(key, int):
+            name = self.getAttributeName(key)
+            key = key
+        else:
+            name = key
+            key = self.getAttributeId(key)
+        
+        # Clear any attributes
+        if key in self.raw_attributes:
+            del self.raw_attributes[key]
+        if name in self.attributes:
+            del self.attributes[name]
+
+        self.addAttribute(key, value)
+        
     def addAttribute(self, key, value):
         "Add a attribute to this packet"
 
@@ -140,7 +156,11 @@ class RadiusPacket(object):
         "Return a datagram for this packet"
         # Encode attributes
         attributes = ""
-        for k,v in self.raw_attributes.items():
+        attr_keys = self.raw_attributes.keys()
+        # Ensure we always do this in the same order (important for hashing)
+        attr_keys.sort()
+        for k in attr_keys:
+            v = self.raw_attributes[k]
             for attr in v:
                 attr_hdr = struct.pack('!BB', k, len(attr)+2)
                 attributes += attr_hdr + attr
@@ -150,6 +170,6 @@ class RadiusPacket(object):
         # Create first authenticator header
         first_header = self.encodeHeader(length, self.rad_auth)
         # Create real hash
-        s = hashlib.md5(first_header + attributes + secret).digest()
+        s = hashlib.md5(first_header + secret).digest()
 
         return self.encodeHeader(length, s) + attributes
