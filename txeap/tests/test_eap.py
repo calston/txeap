@@ -23,8 +23,7 @@ class Tests(unittest.TestCase):
         eapm = eap.EAPMessage(
             pkt, 'testseekrit', eap.EAPResponse, 0, eap.EAPRequestIdentity)
 
-        pkt.addAttribute('EAP-Message', eapm.encodeEAPMessage('test'))
-        pkt.setAttribute('Message-Authenticator', eapm.createAuthenticator(pkt))
+        pkt = eapm.createReplyPacket('test')
 
         dg = pkt.encodeDatagram('testseekrit')
 
@@ -32,3 +31,18 @@ class Tests(unittest.TestCase):
         eap_data = newpkt.get('EAP-Message')[0]
         eapm = eap.EAPMessage(newpkt, 'testseekrit', data=eap_data)
 
+    def test_eapmd5(self):
+        # Build a challenge request
+        eapmd5 = eap.EAPMD5ChallengeRequest(self.pkt, 'testseekrit')
+
+        dg = eapmd5.createPacket().encodeDatagram('testseekrit')
+
+        pkt = packet.RadiusPacket(datagram=dg)
+        eap_data = pkt.get('EAP-Message')[0]
+        
+        # Verify it can be decoded
+        eapm = eap.EAPMessage(self.pkt, 'testseekrit', data=eap_data)
+
+        self.assertEquals(eapm.eap_id, 1)
+        self.assertEquals(eapm.eap_type, 4)
+        self.assertEquals(eapm.eap_code, 1)

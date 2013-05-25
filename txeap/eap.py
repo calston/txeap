@@ -61,37 +61,31 @@ class EAPMessage(object):
 
     def createAuthenticator(self, pkt):
         "Build a Message-Authenticator for this packet"
-        print self.secret
-        pkt.setAttribute('Message-Authenticator', '\x00'*16)
-        print pkt.attributes
-        datagram = pkt.encodeDatagram(self.secret)
-        print "First datagram", repr(datagram)
-        h = hmac.new(self.secret, datagram)
 
-        print 'hmac', repr(h.digest()), len(h.digest())
-        return h.digest()
+        pkt.setAttribute('Message-Authenticator', '\x00'*16)
+        datagram = pkt.encodeDatagram(self.secret)
+
+        return hmac.new(self.secret, datagram).digest()
 
     def createReplyPacket(self, data):
         "Build a reply packet for this message"
-        reply = self.pkt.createReply(self.packet_type)
+        reply = self.pkt.createReply(self.eap_type)
 
         reply.addAttribute('EAP-Message', self.encodeEAPMessage(data))
         reply.setAttribute('Message-Authenticator', 
                             self.createAuthenticator(reply))
 
-        print reply.attributes
-        print "EAPR datagram ", repr(reply.encodeDatagram(self.secret))
         return reply
 
     def validateAuthenticator(self):
         "Validate the authenticator for this message"
-        mac = self.pkt.get('Message-Authenticator') 
+        mac = self.pkt.get('Message-Authenticator')[0]
         # Witchcraft
         dg = self.pkt.datagram
-        dg = dg.replace(mac[0], '\x00'*16)
+        dg = dg.replace(mac, '\x00'*16)
         h = hmac.new(self.secret, dg).digest()
 
-        return h==mac[0]
+        return h==mac
 
     def decodeEAPMessage(self, data):
         if not self.validateAuthenticator():
@@ -113,10 +107,13 @@ class EAPMessage(object):
 
 
 class EAPMD5ChallengeRequest(EAPMessage):
-    eap_code = 1
-    eap_type = 4
-    eap_id = 1
-    packet_type = packet.AccessChallenge
+
+    def __init__(self, pkt, secret):
+        self.eap_code = 1
+        self.eap_type = 4
+        self.eap_id = 1
+        self.pkt = pkt
+        self.secret = secret
 
     def createPacket(self):
         "Create an MD5 challenge EAP message"
@@ -124,7 +121,5 @@ class EAPMD5ChallengeRequest(EAPMessage):
         data_hdr = struct.pack('!BB', self.eap_type, 16)
         data = hashlib.md5(self.randstr).digest()
 
-        print len(data)
-        
         return self.createReplyPacket(data_hdr + data)
 
