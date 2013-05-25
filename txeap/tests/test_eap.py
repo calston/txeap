@@ -23,7 +23,7 @@ class Tests(unittest.TestCase):
         eapm = eap.EAPMessage(
             pkt, 'testseekrit', eap.EAPResponse, 0, eap.EAPRequestIdentity)
 
-        pkt = eapm.createReplyPacket('test')
+        pkt = eapm.createReplyPacket(packet.AccessRequest, 'test')
 
         dg = pkt.encodeDatagram('testseekrit')
 

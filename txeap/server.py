@@ -37,8 +37,7 @@ class RadiusServer(protocol.DatagramProtocol):
             if eapm:
                 rp = self.eapProcessor.processMessage(pkt, host)
 
+            data = rp.encodeDatagram(self.secret)
+            print self.secret, repr(data)
             # Encode and write the response
-            self.transport.write(
-                rp.encodeDatagram(self.secret), 
-                host
-            )
+            self.transport.write(data, host)

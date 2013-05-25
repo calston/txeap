@@ -67,9 +67,9 @@ class EAPMessage(object):
 
         return hmac.new(self.secret, datagram).digest()
 
-    def createReplyPacket(self, data):
+    def createReplyPacket(self, type, data):
         "Build a reply packet for this message"
-        reply = self.pkt.createReply(self.eap_type)
+        reply = self.pkt.createReply(type)
 
         reply.addAttribute('EAP-Message', self.encodeEAPMessage(data))
         reply.setAttribute('Message-Authenticator', 
@@ -121,5 +121,5 @@ class EAPMD5ChallengeRequest(EAPMessage):
         data_hdr = struct.pack('!BB', self.eap_type, 16)
         data = hashlib.md5(self.randstr).digest()
 
-        return self.createReplyPacket(data_hdr + data)
+        return self.createReplyPacket(packet.AccessChallenge, data_hdr + data)
 
