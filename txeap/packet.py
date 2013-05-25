@@ -1,5 +1,6 @@
 import struct
 import hashlib
+import hmac
 import uuid
 
 from txeap import dictionary
@@ -144,6 +145,23 @@ class RadiusPacket(object):
 
             buffer = buffer[val_len:]
 
+    def validateAuthenticator(self):
+        "Validate the authenticator for this message"
+        mac = self.pkt.get('Message-Authenticator')[0]
+        # Witchcraft
+        dg = self.pkt.datagram
+        dg = dg.replace(mac, '\x00'*16)
+        h = hmac.new(self.secret, dg).digest()
+
+        return h==mac
+
+    def createAuthenticator(self, pkt):
+        "Build a Message-Authenticator for this packet"
+
+        pkt.setAttribute('Message-Authenticator', '\x00'*16)
+        datagram = pkt.encodeDatagram(self.secret)
+
+
     def encodeHeader(self, length, authenticator):
         return struct.pack('!BBH16s', 
             self.rad_code, 
@@ -152,8 +170,7 @@ class RadiusPacket(object):
             authenticator
         )
 
-    def encodeDatagram(self, secret):
-        "Return a datagram for this packet"
+    def encodeAttributes(self):
         # Encode attributes
         attributes = ""
         attr_keys = self.raw_attributes.keys()
@@ -165,11 +182,31 @@ class RadiusPacket(object):
                 attr_hdr = struct.pack('!BB', k, len(attr)+2)
                 attributes += attr_hdr + attr
 
+        return attributes
+
+    def encodeDatagram(self, secret):
+        "Return a datagram for this packet"
+
+        attributes = self.encodeAttributes()
+        # Tack on blank Message-Authenticator
+        blank_ma = struct.pack('!BB', 80,18) + '\x00'*16
+        attributes += blank_ma
+
         length = 20+len(attributes)
-        
+
         # Create first authenticator header
         first_header = self.encodeHeader(length, self.rad_auth)
-        # Create real hash
-        s = hashlib.md5(first_header + secret).digest()
 
-        return self.encodeHeader(length, s) + attributes
+        # Create the real Message-Authenticator and replace blank
+        real_ma = hmac.new(secret, first_header + attributes).digest()
+        attributes = attributes[:-16] + real_ma
+
+        # For the record, whoever designed these hashing validation
+        # mechanisms. You sir, are a jackass. This is seriously retarded
+
+        # Create authenticator hash
+        s = hashlib.md5(first_header + attributes + secret).digest()
+       
+        datagram = self.encodeHeader(length, s) + attributes
+
+        return datagram

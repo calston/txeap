@@ -59,38 +59,15 @@ class EAPMessage(object):
         if data:
             self.decodeEAPMessage(data)
 
-    def createAuthenticator(self, pkt):
-        "Build a Message-Authenticator for this packet"
-
-        pkt.setAttribute('Message-Authenticator', '\x00'*16)
-        datagram = pkt.encodeDatagram(self.secret)
-
-        return hmac.new(self.secret, datagram).digest()
-
     def createReplyPacket(self, type, data):
         "Build a reply packet for this message"
         reply = self.pkt.createReply(type)
 
         reply.addAttribute('EAP-Message', self.encodeEAPMessage(data))
-        reply.setAttribute('Message-Authenticator', 
-                            self.createAuthenticator(reply))
 
         return reply
 
-    def validateAuthenticator(self):
-        "Validate the authenticator for this message"
-        mac = self.pkt.get('Message-Authenticator')[0]
-        # Witchcraft
-        dg = self.pkt.datagram
-        dg = dg.replace(mac, '\x00'*16)
-        h = hmac.new(self.secret, dg).digest()
-
-        return h==mac
-
     def decodeEAPMessage(self, data):
-        if not self.validateAuthenticator():
-            raise EAPException("Invalid Message-Authenticator")
-
         # Decode EAP message
         (self.eap_code, self.eap_id, 
             eap_len, self.eap_type) = struct.unpack('!BBHB', data[:5])
