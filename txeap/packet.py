@@ -48,6 +48,22 @@ class RadiusPacket(object):
         if self.datagram:
             self.decodeDatagram()
 
+    def getUserPassword(self, secret):
+        """
+            The fact that the IEEE ratifies stuff like this 
+            makes me weep for the entire human race
+        """
+        pw = self.get('User-Password')[0]
+        hash = hashlib.md5(secret + self.rad_auth).digest()
+        b = ''
+        for i, c in enumerate(pw):
+            if (not i%16) and i>0:
+                hash = hashlib.md5(secret + pw[i-16:i]).digest()
+
+            b += chr(ord(hash[i%len(hash)]) ^ ord(c))
+
+        return b.strip('\x00')
+
     def createReply(self, code=1):
         "Return a configured reply packet for this packet of type 'code'"
         return RadiusPacket(code, self.rad_id, self.rad_auth, 
@@ -145,22 +161,14 @@ class RadiusPacket(object):
 
             buffer = buffer[val_len:]
 
-    def validateAuthenticator(self):
+    def validateAuthenticator(self, secret):
         "Validate the authenticator for this message"
-        mac = self.pkt.get('Message-Authenticator')[0]
-        # Witchcraft
-        dg = self.pkt.datagram
+        mac = self.get('Message-Authenticator')[0]
+        dg = self.datagram
         dg = dg.replace(mac, '\x00'*16)
-        h = hmac.new(self.secret, dg).digest()
+        h = hmac.new(secret, dg).digest()
 
         return h==mac
-
-    def createAuthenticator(self, pkt):
-        "Build a Message-Authenticator for this packet"
-
-        pkt.setAttribute('Message-Authenticator', '\x00'*16)
-        datagram = pkt.encodeDatagram(self.secret)
-
 
     def encodeHeader(self, length, authenticator):
         return struct.pack('!BBH16s', 
