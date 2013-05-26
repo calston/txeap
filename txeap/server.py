@@ -23,6 +23,19 @@ class RadiusServer(protocol.DatagramProtocol):
         pkt = packet.RadiusPacket(datagram=datagram)
         self.processPacket(pkt, hp)
 
+    def authenticateUser(self, username, password):
+        """
+            Pass credentials to each backend and return 
+            a response packet for the first match
+        """
+        keys = None
+
+        for b in self.registeredBackends:
+            keys = b.validate(username, password)
+            if keys:
+                return keys
+        return keys
+
     def processPacket(self, pkt, host):
         if pkt.rad_code == packet.AccessRequest:
             rp = pkt.createReply(packet.AccessReject)

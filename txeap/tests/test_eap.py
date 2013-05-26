@@ -33,7 +33,7 @@ class Tests(unittest.TestCase):
 
     def test_eapmd5(self):
         # Build a challenge request
-        eapmd5 = eap.EAPMD5ChallengeRequest(self.pkt, 'testseekrit')
+        eapmd5 = eap.EAPMD5ChallengeRequest(self.pkt, 1, 'testseekrit')
 
         dg = eapmd5.createPacket().encodeDatagram('testseekrit')
 

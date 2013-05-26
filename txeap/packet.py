@@ -62,7 +62,7 @@ class RadiusPacket(object):
 
             b += chr(ord(hash[i%len(hash)]) ^ ord(c))
 
-        return b.strip('\x00')
+        return b.rstrip('\x00')
 
     def createReply(self, code=1):
         "Return a configured reply packet for this packet of type 'code'"

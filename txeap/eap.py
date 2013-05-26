@@ -15,7 +15,9 @@ EAPFail = 4
 
 # Types
 EAPRequestIdentity = 1
+EAPNak = 3 
 EAPMD5Challenge = 4
+EAPPEAP = 25
 
 class EAPException(Exception):
     "EAP Exception"
@@ -27,38 +29,66 @@ class EAPProcessor(object):
         self.auth_states = {}
 
         self.auth_methods = [
-            self.eapMD5
+            self.eapMD5,
+            self.eapPEAP
         ]
 
     def eapMD5(self, message):
-        if message.eap_type == EAPRequestIdentity:
-            return EAPMD5ChallengeRequest(message.pkt, self.server.secret)
-        elif message.eap_type == EAPMD5Challenge:
+        if message.eap_type == EAPMD5Challenge:
             # Challenge accepted
 
-            print message.pkt.getUserPassword(self.server.secret)
+            passwd = message.pkt.getUserPassword(self.server.secret)
+            username = message.pkt.get('User-Name')[0]
+
+            authorization = self.server.authenticateUser(username, passwd)
+            if authorization:
+                return EAPSuccessReply(
+                    message.pkt, message.eap_id, self.server.secret)
+            else:
+                return EAPFailReply(
+                    message.pkt, message.eap_id, self.server.secret)
+
+            del self.auth_states[message.pkt.get('State')[0]]
+
+        else:
+            return EAPMD5ChallengeRequest(
+                message.pkt, message.eap_id, self.server.secret)
+
+    def eapPEAP(self, message):
+        pass
 
     def processEAPMessage(self, message):
         print message, message.pkt.attributes
         now = time.time()
         # Get incomming State if there is one
-        state = message.pkt.get('state')
+        state = message.pkt.get('State')
 
-        print state
         if not state:
             state = uuid.uuid1().bytes
             self.auth_states[state] = [0, now]
         else:
             state = state[0]
 
+        if ((message.eap_code == EAPRequest) and (message.eap_type == EAPNak)):
+            # Is EAP Nak
+            if self.auth_states[state][0] < len(self.auth_methods)-1:
+                # Advance to next method
+                self.auth_states[state][0]+=1
+            else:
+                # No agreement
+                print "No agreement reached"
+                del self.auth_states[state]
+                return message.pkt.createReply(packet.AccessReject)
+
         # Find a processor for this state
         r = self.auth_methods[self.auth_states[state][0]](message)
 
-        packet = r.createPacket()
-        # Add State attribute 
-        packet.addAttribute('State', state)
+        pkt = r.createPacket()
 
-        return packet
+        # Add State attribute 
+        pkt.addAttribute('State', state)
+
+        return pkt
 
     def processMessage(self, pkt, host):
         # Long EAP messages are sent as multiple attributes so just join them
@@ -81,7 +111,7 @@ class EAPMessage(object):
         if data:
             self.decodeEAPMessage(data)
 
-    def createReplyPacket(self, type, data):
+    def createReplyPacket(self, type, data=''):
         "Build a reply packet for this message"
         reply = self.pkt.createReply(type)
 
@@ -98,11 +128,18 @@ class EAPMessage(object):
 
     def encodeEAPMessage(self, data):
         "Encode this object and some data back into an EAP-Message"
-        l = len(data)+5
+        l = len(data)+4
 
-        pkt_hdr = struct.pack('!BBHB', self.eap_code, 
-                                self.eap_id, l, self.eap_type)
-        return pkt_hdr + data
+        if self.eap_type:
+            l += 1
+            t = struct.pack('!B', self.eap_type)
+        else:
+            t = ''
+
+        pkt_hdr = struct.pack('!BBH', self.eap_code, 
+                                self.eap_id, l)
+
+        return pkt_hdr + t + data
 
     def __str__(self):
         return "<EAPMessage code=%s type=%s id=%s data=%s>" % (
@@ -112,10 +149,10 @@ class EAPMessage(object):
 
 class EAPMD5ChallengeRequest(EAPMessage):
 
-    def __init__(self, pkt, secret):
-        self.eap_code = 1
+    def __init__(self, pkt, id, secret):
+        self.eap_code = EAPRequest
         self.eap_type = EAPMD5Challenge
-        self.eap_id = 1
+        self.eap_id = id
         self.pkt = pkt
         self.secret = secret
 
@@ -126,4 +163,40 @@ class EAPMD5ChallengeRequest(EAPMessage):
         data = hashlib.md5(self.randstr).digest()
 
         return self.createReplyPacket(packet.AccessChallenge, data_hdr + data)
+
+class EAPPEAPChallengeRequest(EAPMessage):
+    def __init__(self, pkt, id, secret):
+        self.eap_code=EAPRequest
+        self.eap_type=EAPPEAP
+        self.eap_id = id
+        self.pkt = pkt
+        self.secret = secret
+    
+    def createPacket(self):
+        "Create a PEAP challnge EAP message"
+        return self.createReplyPacket(packet.AccessChallenge, data)
+
+class EAPSuccessReply(EAPMessage):
+     def __init__(self, pkt, id, secret):
+        self.eap_code=EAPSuccess
+        self.eap_type=None
+        self.eap_id = id
+        self.pkt = pkt
+        self.secret = secret
+
+     def createPacket(self):
+        "Create a PEAP challnge EAP message"
+        return self.createReplyPacket(packet.AccessAccept, '')
+
+class EAPFailReply(EAPMessage):
+     def __init__(self, pkt, id, secret):
+        self.eap_code=EAPFail
+        self.eap_type=None
+        self.eap_id = id
+        self.pkt = pkt
+        self.secret = secret
+
+     def createPacket(self):
+        "Create a PEAP challnge EAP message"
+        return self.createReplyPacket(packet.AccessReject, '')
 
