@@ -6,6 +6,7 @@ from txeap import packet, eap, backends
 class RadiusServer(protocol.DatagramProtocol):
     def __init__(self, config):
         self.config = config
+        print config
         self.secret = config.get('main', 'secret')
 
         # Special processors
@@ -46,6 +47,14 @@ class RadiusServer(protocol.DatagramProtocol):
                 ma = pkt.get('Message-Authenticator')
                 if ma and pkt.validateAuthenticator(self.secret):
                     rp = self.eapProcessor.processMessage(pkt, host)
+
+            elif pkt.get('User-Name'):
+                user = pkt.get('User-Name')[0] 
+                # Stock auth
+                self.authenticateUser(
+                    user, 
+                    pkt.getUserPassword(self.secret)
+                )
 
             data = rp.encodeDatagram(self.secret)
             # Encode and write the response

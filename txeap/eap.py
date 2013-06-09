@@ -1,3 +1,8 @@
+from OpenSSL.SSL import Error, ZeroReturnError, WantReadError
+from OpenSSL.SSL import TLSv1_METHOD, Context, Connection
+
+from twisted.internet import ssl
+
 from txeap import packet
 
 import os
@@ -22,6 +27,12 @@ EAPPEAP = 25
 class EAPException(Exception):
     "EAP Exception"
 
+
+class TLSContextFactory(ssl.DefaultOpenSSLContextFactory):
+    def __init__(self, *args, **kw):
+        kw['sslmethod'] = SSL.TLSv1_METHOD
+        ssl.DefaultOpenSSLContextFactory.__init__(self, *args, **kw)
+
 class EAPProcessor(object):
     def __init__(self, server):
         self.server = server
@@ -33,7 +44,13 @@ class EAPProcessor(object):
             self.eapPEAP
         ]
 
-    def eapMD5(self, message):
+        self.key = server.config.get('main', 'ssl_key')
+        self.cert = server.config.get('main', 'ssl_cert')
+
+        self.peap_contexts = {}
+
+    def eapMD5(self, message, state):
+        "Handle EAP-MD5 sessions"
         if message.eap_type == EAPMD5Challenge:
             # Challenge accepted
 
@@ -54,8 +71,18 @@ class EAPProcessor(object):
             return EAPMD5ChallengeRequest(
                 message.pkt, message.eap_id, self.server.secret)
 
-    def eapPEAP(self, message):
-        pass
+    def eapPEAP(self, message, state):
+        "Handle EAP-PEAP sessions"
+
+        if state in self.peap_contexts:
+            context = self.peap_contexts[state]
+        else:
+            # Get a new context
+            context = TLSContextFactory(self.key, self.cert)
+            self.peap_contexts[state] = context
+
+        return EAPPEAPChallengeRequest(context,
+            message.pkt, message.eap_id, self.server.secret)
 
     def processEAPMessage(self, message):
         print message, message.pkt.attributes
@@ -65,7 +92,7 @@ class EAPProcessor(object):
 
         if not state:
             state = uuid.uuid1().bytes
-            self.auth_states[state] = [0, now]
+            self.auth_states[state] = [0, now, None]
         else:
             state = state[0]
 
@@ -81,7 +108,7 @@ class EAPProcessor(object):
                 return message.pkt.createReply(packet.AccessReject)
 
         # Find a processor for this state
-        r = self.auth_methods[self.auth_states[state][0]](message)
+        r = self.auth_methods[self.auth_states[state][0]](message, state)
 
         pkt = r.createPacket()
 
@@ -148,7 +175,6 @@ class EAPMessage(object):
 
 
 class EAPMD5ChallengeRequest(EAPMessage):
-
     def __init__(self, pkt, id, secret):
         self.eap_code = EAPRequest
         self.eap_type = EAPMD5Challenge
@@ -165,12 +191,14 @@ class EAPMD5ChallengeRequest(EAPMessage):
         return self.createReplyPacket(packet.AccessChallenge, data_hdr + data)
 
 class EAPPEAPChallengeRequest(EAPMessage):
-    def __init__(self, pkt, id, secret):
+    def __init__(self, context, pkt, id, secret):
         self.eap_code=EAPRequest
         self.eap_type=EAPPEAP
         self.eap_id = id
         self.pkt = pkt
         self.secret = secret
+        # PEAP needs an SSL context
+        self.context = context
     
     def createPacket(self):
         "Create a PEAP challnge EAP message"
