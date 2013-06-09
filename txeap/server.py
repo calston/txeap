@@ -1,4 +1,4 @@
-from twisted.internet import protocol
+from twisted.internet import protocol, defer, reactor
 
 from txeap import packet, eap, backends
 
@@ -22,8 +22,9 @@ class RadiusServer(protocol.DatagramProtocol):
     def datagramReceived(self, datagram, hp):
         "Creates a packet object for received datagrams"
         pkt = packet.RadiusPacket(datagram=datagram)
-        self.processPacket(pkt, hp)
+        reactor.callLater(0, self.processPacket, pkt, hp)
 
+    @defer.inlineCallbacks
     def authenticateUser(self, username, password):
         """
             Pass credentials to each backend and return 
@@ -32,11 +33,15 @@ class RadiusServer(protocol.DatagramProtocol):
         keys = None
 
         for b in self.registeredBackends:
-            keys = b.validate(username, password)
+            try:
+                keys = yield defer.maybeDeferred(b.validate, username, password)
+            except:
+                keys = None
             if keys:
-                return keys
-        return keys
+                defer.returnValue(keys)
+        defer.returnValue(keys)
 
+    @defer.inlineCallbacks
     def processPacket(self, pkt, host):
         if pkt.rad_code == packet.AccessRequest:
             rp = pkt.createReply(packet.AccessReject)
@@ -51,10 +56,13 @@ class RadiusServer(protocol.DatagramProtocol):
             elif pkt.get('User-Name'):
                 user = pkt.get('User-Name')[0] 
                 # Stock auth
-                self.authenticateUser(
+                auth = yield self.authenticateUser(
                     user, 
                     pkt.getUserPassword(self.secret)
                 )
+
+                if auth:
+                    rp = pkt.createReply(packet.AccessAccept)
 
             data = rp.encodeDatagram(self.secret)
             # Encode and write the response
