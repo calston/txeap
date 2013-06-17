@@ -1,7 +1,9 @@
-from OpenSSL.SSL import Error, ZeroReturnError, WantReadError
-from OpenSSL.SSL import TLSv1_METHOD, Context, Connection
+from OpenSSL import SSL
+from zope.interface import implements
 
-from twisted.internet import ssl
+from twisted.internet import ssl, protocol
+from twisted.protocols.tls import TLSMemoryBIOFactory, TLSMemoryBIOProtocol
+from twisted.internet.interfaces import ITransport
 
 from txeap import packet
 
@@ -11,6 +13,7 @@ import struct
 import uuid
 import hashlib
 import time
+from StringIO import StringIO
 
 # EAP codes
 EAPRequest = 1
@@ -33,6 +36,34 @@ class TLSContextFactory(ssl.DefaultOpenSSLContextFactory):
         kw['sslmethod'] = SSL.TLSv1_METHOD
         ssl.DefaultOpenSSLContextFactory.__init__(self, *args, **kw)
 
+class EAPTLSProtocol(protocol.Protocol):
+    
+    def dataReceived(self, data):
+        print 'IPI-RX', repr(data)
+
+class EAPTLSTransport:
+    implements(ITransport)
+
+    def __init__(self):
+        self.clear()
+
+    def clear(self):
+        self.io = StringIO()
+
+    def write(self, data):
+        print 'ITI-W', repr(data)
+        self.io.write(data)
+
+    def value(self):
+        return self.io.getvalue()
+
+    def loseConnection(self):
+        pass 
+
+    def dataReceived(self, data):
+        print 'ITI-RX', repr(data)
+
+
 class EAPProcessor(object):
     def __init__(self, server):
         self.server = server
@@ -47,7 +78,7 @@ class EAPProcessor(object):
         self.key = server.config.get('main', 'ssl_key')
         self.cert = server.config.get('main', 'ssl_cert')
 
-        self.peap_contexts = {}
+        self.peap_protocols = {}
 
     def eapMD5(self, message, state):
         "Handle EAP-MD5 sessions"
@@ -74,18 +105,46 @@ class EAPProcessor(object):
     def eapPEAP(self, message, state):
         "Handle EAP-PEAP sessions"
 
-        if state in self.peap_contexts:
-            context = self.peap_contexts[state]
+        if state in self.peap_protocols:
+            tlsProtocol = self.peap_protocols[state]
         else:
-            # Get a new context
-            context = TLSContextFactory(self.key, self.cert)
-            self.peap_contexts[state] = context
+            tlsFactory = TLSMemoryBIOFactory(
+                TLSContextFactory(self.key, self.cert),
+                False, None
+            )
 
-        return EAPPEAPChallengeRequest(context,
+            proto = EAPTLSProtocol()
+
+            tlsProtocol = TLSMemoryBIOProtocol(tlsFactory, proto, True)
+
+            tlsProtocol.makeConnection(
+                EAPTLSTransport()
+            )
+
+            # XXX Invalidate this somehow
+            self.peap_protocols[state] = tlsProtocol
+            print self.peap_protocols[state], "<<"
+
+        print "PEAP", repr(state), tlsProtocol
+
+        if ((message.eap_code == EAPResponse) and (message.eap_type == EAPPEAP)):
+            print "TO TLS", repr(message.eap_data[1:])
+            tlsProtocol.transport.clear()
+            tlsProtocol.dataReceived(message.eap_data[1:])
+
+            data = tlsProtocol.transport.value()
+
+            print "next", repr(data)
+
+            return EAPPEAPChallengeRequest(
+                tlsProtocol, message.pkt, message.eap_id, 
+                self.server.secret, data=data)
+
+        return EAPPEAPChallengeRequest(tlsProtocol,
             message.pkt, message.eap_id, self.server.secret)
 
     def processEAPMessage(self, message):
-        print message, message.pkt.attributes
+        print message
         now = time.time()
         # Get incomming State if there is one
         state = message.pkt.get('State')
@@ -96,10 +155,12 @@ class EAPProcessor(object):
         else:
             state = state[0]
 
-        if ((message.eap_code == EAPRequest) and (message.eap_type == EAPNak)):
+        if ((message.eap_code == EAPResponse) and (message.eap_type == EAPNak)):
             # Is EAP Nak
+            print "Got NAK"
             if self.auth_states[state][0] < len(self.auth_methods)-1:
                 # Advance to next method
+                # XXX - actually, the NAK will (might?) include the desired auth type
                 self.auth_states[state][0]+=1
             else:
                 # No agreement
@@ -173,7 +234,6 @@ class EAPMessage(object):
             self.eap_code, self.eap_type, self.eap_id, repr(self.eap_data)
         )
 
-
 class EAPMD5ChallengeRequest(EAPMessage):
     def __init__(self, pkt, id, secret):
         self.eap_code = EAPRequest
@@ -191,18 +251,21 @@ class EAPMD5ChallengeRequest(EAPMessage):
         return self.createReplyPacket(packet.AccessChallenge, data_hdr + data)
 
 class EAPPEAPChallengeRequest(EAPMessage):
-    def __init__(self, context, pkt, id, secret):
-        self.eap_code=EAPRequest
-        self.eap_type=EAPPEAP
+    def __init__(self, proto, pkt, id, secret, data='\x20'):
+        self.eap_code = EAPRequest
+        self.eap_type = EAPPEAP
         self.eap_id = id
         self.pkt = pkt
         self.secret = secret
         # PEAP needs an SSL context
-        self.context = context
-    
+        self.tlsProtocol = proto
+
+        self.data = data
+
     def createPacket(self):
         "Create a PEAP challnge EAP message"
-        return self.createReplyPacket(packet.AccessChallenge, data)
+
+        return self.createReplyPacket(packet.AccessChallenge, self.data)
 
 class EAPSuccessReply(EAPMessage):
      def __init__(self, pkt, id, secret):
