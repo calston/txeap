@@ -37,6 +37,13 @@ class TLSContextFactory(ssl.DefaultOpenSSLContextFactory):
         ssl.DefaultOpenSSLContextFactory.__init__(self, *args, **kw)
 
 class EAPTLSProtocol(protocol.Protocol):
+    def connectionMade(self):
+        print "CM"
+        ctx = TLSContextFactory(
+            privateKeyFileName='keys/server.key',
+            certificateFileName='keys/server.crt',
+        )
+        self.transport.startTLS(ctx, self.factory)
     
     def dataReceived(self, data):
         print 'IPI-RX', repr(data)
@@ -102,26 +109,21 @@ class EAPProcessor(object):
             return EAPMD5ChallengeRequest(
                 message.pkt, message.eap_id, self.server.secret)
 
+    def createTLSProtocol(self):
+        transport = EAPTLSTransport()
+        tlsProtocol = EAPTLSProtocol()
+        tlsProtocol.makeConnection(transport)
+        
+        return tlsProtocol
+
     def eapPEAP(self, message, state):
         "Handle EAP-PEAP sessions"
 
         if state in self.peap_protocols:
             tlsProtocol = self.peap_protocols[state]
         else:
-            tlsFactory = TLSMemoryBIOFactory(
-                TLSContextFactory(self.key, self.cert),
-                False, None
-            )
-
-            proto = EAPTLSProtocol()
-
-            tlsProtocol = TLSMemoryBIOProtocol(tlsFactory, proto, True)
-
-            tlsProtocol.makeConnection(
-                EAPTLSTransport()
-            )
-
             # XXX Invalidate this somehow
+            tlsProtocol = self.createTLSProtocol()
             self.peap_protocols[state] = tlsProtocol
             print self.peap_protocols[state], "<<"
 

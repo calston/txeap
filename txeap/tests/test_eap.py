@@ -1,7 +1,9 @@
 from twisted.trial import unittest
 from twisted.python import log
 
-from txeap import packet, eap
+import ConfigParser
+
+from txeap import packet, eap, server
 
 EAPDatagram='\x01\x00\x00w%\xfd\xe7\xb5,\xc2\xbe-\xd9\xde\xd0\xcco\x94\x04\x8a\x01\x06test\x04\x06\x7f\x00\x00\x01\x1f\x1370-6F-6C-69-73-68\x0c\x06\x00\x00\x05x=\x06\x00\x00\x00\x13M\x1brad_eap_test + eapol_testO\x0b\x02\x00\x00\t\x01testP\x12\x0f\x99\xd2\xc1\xc8E\x88\xc2l07\x1c\xfb\xae\xde\xb0'
 
@@ -10,6 +12,12 @@ class Tests(unittest.TestCase):
         self.pkt = packet.RadiusPacket(datagram=EAPDatagram)
         eap_data = self.pkt.get('EAP-Message')[0]
         self.eap_message = eap.EAPMessage(self.pkt, 'testseekrit', data=eap_data)
+
+        self.config = ConfigParser.SafeConfigParser()
+        self.config.add_section('main')
+        self.config.set('main', 'secret', 'testseekrit')
+        self.config.set('main', 'ssl_cert', '/etc/ssl/certs/ssl-cert-snakeoil.pem')
+        self.config.set('main', 'ssl_key', '/home/colin/googleradius/ssl.key')
 
     def test_decode_message(self):
         self.assertEquals(self.eap_message.eap_code, eap.EAPResponse)
@@ -46,3 +54,14 @@ class Tests(unittest.TestCase):
         self.assertEquals(eapm.eap_id, 1)
         self.assertEquals(eapm.eap_type, 4)
         self.assertEquals(eapm.eap_code, 1)
+
+    def test_tls_transport(self):
+        rad_svr = server.RadiusServer(self.config)
+        proc = eap.EAPProcessor(rad_svr)
+
+        tlsProto = proc.createTLSProtocol()
+
+        tlsProto.transport.write("foooo")
+
+        print '>', repr(tlsProto.transport.value())
+
