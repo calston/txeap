@@ -2,10 +2,10 @@ from OpenSSL import SSL
 from zope.interface import implements
 
 from twisted.internet import ssl, protocol
-from twisted.protocols.tls import TLSMemoryBIOFactory, TLSMemoryBIOProtocol
+from twisted.protocols.tls import TLSMemoryBIOProtocol, TLSMemoryBIOFactory
 from twisted.internet.interfaces import ITransport
 
-from txeap import packet
+from txeap import packet, proto_utils
 
 import os
 import hmac
@@ -30,46 +30,9 @@ EAPPEAP = 25
 class EAPException(Exception):
     "EAP Exception"
 
-
-class TLSContextFactory(ssl.DefaultOpenSSLContextFactory):
-    def __init__(self, *args, **kw):
-        kw['sslmethod'] = SSL.TLSv1_METHOD
-        ssl.DefaultOpenSSLContextFactory.__init__(self, *args, **kw)
-
 class EAPTLSProtocol(protocol.Protocol):
-    def connectionMade(self):
-        print "CM"
-        ctx = TLSContextFactory(
-            privateKeyFileName='keys/server.key',
-            certificateFileName='keys/server.crt',
-        )
-        self.transport.startTLS(ctx, self.factory)
-    
-    def dataReceived(self, data):
-        print 'IPI-RX', repr(data)
-
-class EAPTLSTransport:
-    implements(ITransport)
-
-    def __init__(self):
-        self.clear()
-
-    def clear(self):
-        self.io = StringIO()
-
-    def write(self, data):
-        print 'ITI-W', repr(data)
-        self.io.write(data)
-
-    def value(self):
-        return self.io.getvalue()
-
-    def loseConnection(self):
-        pass 
-
-    def dataReceived(self, data):
-        print 'ITI-RX', repr(data)
-
+    def dataReceived(self, bytes):
+        print "EAPTLSProto <R< ", repr(bytes)
 
 class EAPProcessor(object):
     def __init__(self, server):
@@ -109,13 +72,6 @@ class EAPProcessor(object):
             return EAPMD5ChallengeRequest(
                 message.pkt, message.eap_id, self.server.secret)
 
-    def createTLSProtocol(self):
-        transport = EAPTLSTransport()
-        tlsProtocol = EAPTLSProtocol()
-        tlsProtocol.makeConnection(transport)
-        
-        return tlsProtocol
-
     def eapPEAP(self, message, state):
         "Handle EAP-PEAP sessions"
 
@@ -123,16 +79,31 @@ class EAPProcessor(object):
             tlsProtocol = self.peap_protocols[state]
         else:
             # XXX Invalidate this somehow
-            tlsProtocol = self.createTLSProtocol()
+
+            serverFactory = protocol.ServerFactory()
+            serverFactory.protocol = EAPTLSProtocol
+
+            contextFactory = ssl.DefaultOpenSSLContextFactory(self.key, self.cert)
+
+            wrapperFactory = TLSMemoryBIOFactory(contextFactory, False, serverFactory)
+
+            tlsProtocol = wrapperFactory.buildProtocol(None)
+
+            transport = proto_utils.StringTransport()
+
+            tlsProtocol.makeConnection(transport)
+
             self.peap_protocols[state] = tlsProtocol
+
             print self.peap_protocols[state], "<<"
 
         print "PEAP", repr(state), tlsProtocol
 
         if ((message.eap_code == EAPResponse) and (message.eap_type == EAPPEAP)):
-            print "TO TLS", repr(message.eap_data[1:])
-            tlsProtocol.transport.clear()
-            tlsProtocol.dataReceived(message.eap_data[1:])
+            # Write into the TLS protocol
+
+            print "TO TLS", repr(message.eap_data)
+            print tlsProtocol.dataReceived(message.eap_data[1:])
 
             data = tlsProtocol.transport.value()
 
