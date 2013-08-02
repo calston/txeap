@@ -97,27 +97,32 @@ class EAPProcessor(object):
 
             print self.peap_protocols[state], "<<"
 
-        print "PEAP", repr(state), tlsProtocol
+        #print "PEAP", repr(state), tlsProtocol
 
         if ((message.eap_code == EAPResponse) and (message.eap_type == EAPPEAP)):
             # Write into the TLS protocol
 
-            print "TO TLS", repr(message.eap_data)
-            print tlsProtocol.dataReceived(message.eap_data[1:])
+            in_flags = struct.unpack('!B', message.eap_data[0])[0]
+            if in_flags>0:
+                in_len = struct.unpack('!L', message.eap_data[1:5])[0]
+                in_tls = message.eap_data[5:]
 
-            data = tlsProtocol.transport.value()
+                print "TO TLS", repr(in_tls)
+                print tlsProtocol.dataReceived(in_tls)
 
-            print "next", repr(data)
+                data = tlsProtocol.transport.value()
 
-            return EAPPEAPChallengeRequest(
-                tlsProtocol, message.pkt, message.eap_id, 
-                self.server.secret, data=data)
+                print "next", repr(data)
+
+                return EAPPEAPChallengeRequest(
+                    tlsProtocol, message.pkt, message.eap_id, 
+                    self.server.secret, data=data)
 
         return EAPPEAPChallengeRequest(tlsProtocol,
             message.pkt, message.eap_id, self.server.secret)
 
     def processEAPMessage(self, message):
-        print message
+        #print message
         now = time.time()
         # Get incomming State if there is one
         state = message.pkt.get('State')
