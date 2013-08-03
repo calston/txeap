@@ -105,8 +105,6 @@ class EAPProcessor(object):
     def eapPEAP(self, message, state):
         "Handle EAP-PEAP sessions"
 
-        print "Message state", state
-
         if state in self.peap_protocols:
             tlsProtocol = self.peap_protocols[state]
         else:
@@ -120,6 +118,7 @@ class EAPProcessor(object):
 
             in_flags = struct.unpack('!B', message.eap_data[0])[0]
 
+            buffer = tlsProtocol.transport.io
             if matchflag(in_flags, TLSLen):
                 # Access-Request/response contains data
                 in_len = struct.unpack('!L', message.eap_data[1:5])[0]
@@ -135,7 +134,6 @@ class EAPProcessor(object):
 
                 flags = TLSLen
 
-                buffer = tlsProtocol.transport.io
                 buffer_remaining = len(buffer.buf) - buffer.pos
 
                 if buffer_remaining:
@@ -143,6 +141,8 @@ class EAPProcessor(object):
                     flags |= TLSFrag
                     exlen = len(buffer.buf)
                 else:
+                    # Clear the buffer 
+                    buffer.truncate(0)
                     exlen = len(data)
 
                 #print "Responded > ", flags, exlen, repr(data)[:10]
@@ -150,8 +150,8 @@ class EAPProcessor(object):
                 return EAPPEAPChallengeRequest(
                     tlsProtocol, message.pkt, message.eap_id, 
                     self.server.secret, flags = flags, exlen=exlen, data=data)
+
             else:
-                buffer = tlsProtocol.transport.io
                 buffer_remaining = len(buffer.buf) - buffer.pos
                 if buffer_remaining:
                     # send next fragment
@@ -161,6 +161,7 @@ class EAPProcessor(object):
                         tlsProtocol, message.pkt, message.eap_id, 
                         self.server.secret, flags = flags, data=data)
                 else:
+                    buffer.truncate(0)
                     print "ACK but buffer is clear. WAT DO YOU WANT FROM ME?!"
 
         return EAPPEAPChallengeRequest(tlsProtocol,
