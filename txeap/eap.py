@@ -41,6 +41,7 @@ def matchflag(f, i):
 class EAPException(Exception):
     "EAP Exception"
 
+
 class EAPTLSProtocol(protocol.Protocol):
     def __init__(self, state, protos):
         # Link the protocol instance back to the state holder
@@ -49,193 +50,6 @@ class EAPTLSProtocol(protocol.Protocol):
     def dataReceived(self, bytes):
         print "EAPTLSProto <R< ", repr(bytes)
 
-    def connectionMade(self):
-        print "Connection made"
-
-        print self.transport
-
-class EAPProcessor(object):
-    def __init__(self, server):
-        self.server = server
-
-        self.auth_states = {}
-
-        self.auth_methods = [
-            self.eapMD5,
-            self.eapPEAP
-        ]
-
-        self.key = server.config.get('main', 'ssl_key')
-        self.cert = server.config.get('main', 'ssl_cert')
-
-        self.peap_protocols = {}
-        self.peap_buffers = {}
-
-    def eapMD5(self, message, state):
-        "Handle EAP-MD5 sessions"
-        if message.eap_type == EAPMD5Challenge:
-            # Challenge accepted
-
-            passwd = message.pkt.getUserPassword(self.server.secret)
-            username = message.pkt.get('User-Name')[0]
-
-            authorization = self.server.authenticateUser(username, passwd)
-            if authorization:
-                return EAPSuccessReply(
-                    message.pkt, message.eap_id, self.server.secret)
-            else:
-                return EAPFailReply(
-                    message.pkt, message.eap_id, self.server.secret)
-
-            del self.auth_states[message.pkt.get('State')[0]]
-
-        else:
-            return EAPMD5ChallengeRequest(
-                message.pkt, message.eap_id, self.server.secret)
-
-    def getEAPTLSTransport(self, state):
-        # Create a server factory
-        serverFactory = protocol.ServerFactory()
-        serverFactory.protocol = lambda : EAPTLSProtocol(state, self.peap_protocols)
-
-        # Wrap it onto a context
-        contextFactory = ssl.DefaultOpenSSLContextFactory(
-            self.key, self.cert, sslmethod=SSL.TLSv1_METHOD
-        )
-        wrapperFactory = TLSMemoryBIOFactory(contextFactory, False, serverFactory)
-
-        # Rig up a SSL wrapper to fake transport 
-        tlsProtocol = wrapperFactory.buildProtocol(None)
-        transport = proto_utils.StringTransport()
-        tlsProtocol.makeConnection(transport)
-
-        return tlsProtocol
-
-    def eapPEAP(self, message, state):
-        "Handle EAP-PEAP sessions"
-
-        if state in self.peap_protocols:
-            tlsProtocol, tlsInput = self.peap_protocols[state]
-        else:
-            # XXX Invalidate this somehow
-
-            # Set the auth process state
-            self.auth_states[state][2] = 0
-            self.peap_protocols[state] = [None, None]
-            tlsProtocol = self.getEAPTLSTransport(state)
-            # Link the tlsProtocol, and extract the input protocol
-            self.peap_protocols[state][0] = tlsProtocol
-            tlsInput = self.peap_protocols[state][1]
-
-        print "Proto object selected:", tlsProtocol, tlsInput
-
-        if ((message.eap_code == EAPResponse) and (message.eap_type == EAPPEAP)):
-
-            in_flags = struct.unpack('!B', message.eap_data[0])[0]
-
-            buffer = tlsProtocol.transport.io
-            if matchflag(in_flags, TLSLen):
-                # Access-Request/response contains data
-                in_len = struct.unpack('!L', message.eap_data[1:5])[0]
-                in_tls = message.eap_data[5:]
-
-                # Write into the TLS protocol
-
-                tlsProtocol.dataReceived(in_tls)
-    
-                # Read response from TLS protocol
-                tlsProtocol.transport.io.seek(0)
-                data = tlsProtocol.transport.io.read(1000)
-
-                flags = TLSLen
-
-                buffer_remaining = len(buffer.buf) - buffer.pos
-
-                if buffer_remaining:
-                    # Fragment this data
-                    flags |= TLSFrag
-                    exlen = len(buffer.buf)
-                else:
-                    # Clear the buffer 
-                    buffer.truncate(0)
-                    exlen = len(data)
-
-                #print "Responded > ", flags, exlen, repr(data)[:10]
-
-                return EAPPEAPChallengeRequest(
-                    tlsProtocol, message.pkt, message.eap_id, 
-                    self.server.secret, flags = flags, exlen=exlen, data=data)
-
-            else:
-                buffer_remaining = len(buffer.buf) - buffer.pos
-                if buffer_remaining:
-                    # send next fragment
-                    data = tlsProtocol.transport.io.read(1000)
-                    flags = 0
-                    return EAPPEAPChallengeRequest(
-                        tlsProtocol, message.pkt, message.eap_id, 
-                        self.server.secret, flags = flags, data=data)
-                else:
-                    self.auth_states[state][2] += 1 
-                    buffer.truncate(0)
-
-        auth_state = self.auth_states[state][2] 
-
-        print "Current state:", auth_state
-
-        if auth_state == 0:
-            return EAPPEAPChallengeRequest(tlsProtocol,
-                message.pkt, message.eap_id, self.server.secret, flags = TLSStart)
-
-        elif auth_state == 1:
-            buffer.truncate(0)
-            tlsInput.transport.write('Nonsense')
-            data = tlsProtocol.transport.value()
-            return EAPPEAPChallengeRequest(tlsProtocol,
-                message.pkt, message.eap_id, self.server.secret, data=data)
-
-    def processEAPMessage(self, message):
-        #print message
-        now = time.time()
-        # Get incomming State if there is one
-        state = message.pkt.get('State')
-
-        if not state:
-            state = uuid.uuid1().bytes
-            self.auth_states[state] = [0, now, None]
-        else:
-            state = state[0]
-
-        if ((message.eap_code == EAPResponse) and (message.eap_type == EAPNak)):
-            # Is EAP Nak
-            print "Got NAK"
-            if self.auth_states[state][0] < len(self.auth_methods)-1:
-                # Advance to next method
-                # XXX - actually, the NAK will (might?) include the desired auth type
-                self.auth_states[state][0]+=1
-            else:
-                # No agreement
-                print "No agreement reached"
-                del self.auth_states[state]
-                return message.pkt.createReply(packet.AccessReject)
-
-        # Find a processor for this state
-        r = self.auth_methods[self.auth_states[state][0]](message, state)
-
-        pkt = r.createPacket()
-
-        # Add State attribute 
-        pkt.addAttribute('State', state)
-
-        return pkt
-
-    def processMessage(self, pkt, host):
-        # Long EAP messages are sent as multiple attributes so just join them
-        eap_data = ''.join(pkt.get('EAP-Message'))
-
-        message = EAPMessage(pkt, self.server.secret, data=eap_data)
-        
-        return self.processEAPMessage(message)
 
 class EAPMessage(object):
     def __init__(self, pkt, secret, code=0, id=0, type=0, data=None):
@@ -285,6 +99,7 @@ class EAPMessage(object):
             self.eap_code, self.eap_type, self.eap_id, repr(self.eap_data)
         )
 
+
 class EAPMD5ChallengeRequest(EAPMessage):
     def __init__(self, pkt, id, secret):
         self.eap_code = EAPRequest
@@ -300,6 +115,39 @@ class EAPMD5ChallengeRequest(EAPMessage):
         data = hashlib.md5(self.randstr).digest()
 
         return self.createReplyPacket(packet.AccessChallenge, data_hdr + data)
+
+class EAPIdentity(EAPMessage):
+    def __init__(self, pkt, id, secret):
+        self.eap_code = EAPRequest
+        self.eap_type = EAPRequestIdentity
+
+        self.eap_id = id
+        self.pkt = pkt
+        self.secret = secret
+
+class EAPPEAPIdentity(EAPMessage):
+    def __init__(self, proto, in_proto, pkt, id, secret):
+        self.eap_code = EAPRequest
+        self.eap_type = EAPPEAP
+        self.eap_id = id
+        self.pkt = pkt
+        self.secret = secret
+
+        # PEAP needs an SSL context
+        self.tlsProtocol = proto
+        self.tlsInput = in_proto
+
+    def createPacket(self):
+        # Nest EAPIdentity
+        ei = EAPIdentity(self.pkt, self.eap_id, self.secret).encodeEAPMessage('Hello')
+
+        self.tlsProtocol.transport.clear()
+        self.tlsInput.transport.write(ei)
+        data = self.tlsProtocol.transport.value()
+
+        data = struct.pack('!B', 0) + data
+
+        return self.createReplyPacket(packet.AccessChallenge, data)
 
 class EAPPEAPChallengeRequest(EAPMessage):
     def __init__(self, proto, pkt, id, secret, flags=0, exlen=0, data=''):
@@ -325,6 +173,7 @@ class EAPPEAPChallengeRequest(EAPMessage):
 
         return self.createReplyPacket(packet.AccessChallenge, data)
 
+
 class EAPSuccessReply(EAPMessage):
      def __init__(self, pkt, id, secret):
         self.eap_code=EAPSuccess
@@ -336,6 +185,7 @@ class EAPSuccessReply(EAPMessage):
      def createPacket(self):
         "Create a PEAP challnge EAP message"
         return self.createReplyPacket(packet.AccessAccept, '')
+
 
 class EAPFailReply(EAPMessage):
      def __init__(self, pkt, id, secret):

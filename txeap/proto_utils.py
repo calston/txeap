@@ -1,10 +1,9 @@
 from StringIO import StringIO
-from twisted.internet.interfaces import ITransport, IConsumer, IPushProducer,\
-    IConnector
+from twisted.internet.interfaces import ITransport
 from zope.interface import implements
 
 class StringTransport:
-    implements(ITransport, IConsumer, IPushProducer)
+    implements(ITransport)
 
     disconnecting = False
 
@@ -50,6 +49,7 @@ class StringTransport:
     def write(self, data):
         if isinstance(data, unicode): # no, really, I mean it
             raise TypeError("Data must not be unicode")
+        print 'IOTransport', repr(data)
         self.io.write(data)
 
     def writeSequence(self, data):
@@ -73,35 +73,3 @@ class StringTransport:
             return address.IPv4Address('TCP', '10.0.0.1', 12345)
         return self.hostAddr
 
-    # IConsumer
-    def registerProducer(self, producer, streaming):
-        if self.producer is not None:
-            raise RuntimeError("Cannot register two producers")
-        self.producer = producer
-        self.streaming = streaming
-
-    def unregisterProducer(self):
-        if self.producer is None:
-            raise RuntimeError(
-                "Cannot unregister a producer unless one is registered")
-        self.producer = None
-        self.streaming = None
-
-    # IPushProducer
-    def _checkState(self):
-        if self.disconnecting:
-            raise RuntimeError(
-                "Cannot resume producing after loseConnection")
-        if self.producerState == 'stopped':
-            raise RuntimeError("Cannot resume a stopped producer")
-
-    def pauseProducing(self):
-        self._checkState()
-        self.producerState = 'paused'
-
-    def stopProducing(self):
-        self.producerState = 'stopped'
-
-    def resumeProducing(self):
-        self._checkState()
-        self.producerState = 'producing' 

@@ -1,6 +1,6 @@
 from twisted.internet import protocol, defer, reactor
 
-from txeap import packet, eap, backends
+from txeap import packet, eap_processor, backends
 
 
 class RadiusServer(protocol.DatagramProtocol):
@@ -10,7 +10,7 @@ class RadiusServer(protocol.DatagramProtocol):
         self.secret = config.get('main', 'secret')
 
         # Special processors
-        self.eapProcessor = eap.EAPProcessor(self)
+        self.eapProcessor = eap_processor.EAPProcessor(self)
         
         # Setup all available auth backends
         self.registeredBackends = []
