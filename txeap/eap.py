@@ -27,6 +27,17 @@ EAPNak = 3
 EAPMD5Challenge = 4
 EAPPEAP = 25
 
+TLSLen = 0b10000000
+TLSFrag = 0b01000000
+TLSStart = 0b00100000
+
+def joinbits(s):
+    # Join bits together
+    return reduce(lambda x,y: x|y, s)
+
+def matchflag(f, i):
+    return f & i == i 
+
 class EAPException(Exception):
     "EAP Exception"
 
@@ -49,6 +60,7 @@ class EAPProcessor(object):
         self.cert = server.config.get('main', 'ssl_cert')
 
         self.peap_protocols = {}
+        self.peap_buffers = {}
 
     def eapMD5(self, message, state):
         "Handle EAP-MD5 sessions"
@@ -72,54 +84,87 @@ class EAPProcessor(object):
             return EAPMD5ChallengeRequest(
                 message.pkt, message.eap_id, self.server.secret)
 
+    def getEAPTLSTransport(self):
+        # Create a server factory
+        serverFactory = protocol.ServerFactory()
+        serverFactory.protocol = EAPTLSProtocol
+
+        # Wrap it onto a context
+        contextFactory = ssl.DefaultOpenSSLContextFactory(
+            self.key, self.cert, sslmethod=SSL.TLSv1_METHOD
+        )
+        wrapperFactory = TLSMemoryBIOFactory(contextFactory, False, serverFactory)
+
+        # Rig up a SSL wrapper to fake transport 
+        tlsProtocol = wrapperFactory.buildProtocol(None)
+        transport = proto_utils.StringTransport()
+        tlsProtocol.makeConnection(transport)
+
+        return tlsProtocol
+
     def eapPEAP(self, message, state):
         "Handle EAP-PEAP sessions"
+
+        print "Message state", state
 
         if state in self.peap_protocols:
             tlsProtocol = self.peap_protocols[state]
         else:
             # XXX Invalidate this somehow
-
-            serverFactory = protocol.ServerFactory()
-            serverFactory.protocol = EAPTLSProtocol
-
-            contextFactory = ssl.DefaultOpenSSLContextFactory(self.key, self.cert)
-
-            wrapperFactory = TLSMemoryBIOFactory(contextFactory, False, serverFactory)
-
-            tlsProtocol = wrapperFactory.buildProtocol(None)
-
-            transport = proto_utils.StringTransport()
-
-            tlsProtocol.makeConnection(transport)
-
+            tlsProtocol = self.getEAPTLSTransport()
             self.peap_protocols[state] = tlsProtocol
 
-            print self.peap_protocols[state], "<<"
-
-        #print "PEAP", repr(state), tlsProtocol
+        print "Proto object selected:", tlsProtocol
 
         if ((message.eap_code == EAPResponse) and (message.eap_type == EAPPEAP)):
-            # Write into the TLS protocol
 
             in_flags = struct.unpack('!B', message.eap_data[0])[0]
-            if in_flags>0:
+
+            if matchflag(in_flags, TLSLen):
+                # Access-Request/response contains data
                 in_len = struct.unpack('!L', message.eap_data[1:5])[0]
                 in_tls = message.eap_data[5:]
 
-                print "TO TLS", repr(in_tls)
-                print tlsProtocol.dataReceived(in_tls)
+                # Write into the TLS protocol
 
-                data = tlsProtocol.transport.value()
+                tlsProtocol.dataReceived(in_tls)
+    
+                # Read response from TLS protocol
+                tlsProtocol.transport.io.seek(0)
+                data = tlsProtocol.transport.io.read(1000)
 
-                print "next", repr(data)
+                flags = TLSLen
+
+                buffer = tlsProtocol.transport.io
+                buffer_remaining = len(buffer.buf) - buffer.pos
+
+                if buffer_remaining:
+                    # Fragment this data
+                    flags |= TLSFrag
+                    exlen = len(buffer.buf)
+                else:
+                    exlen = len(data)
+
+                #print "Responded > ", flags, exlen, repr(data)[:10]
 
                 return EAPPEAPChallengeRequest(
                     tlsProtocol, message.pkt, message.eap_id, 
-                    self.server.secret, data=data)
+                    self.server.secret, flags = flags, exlen=exlen, data=data)
+            else:
+                buffer = tlsProtocol.transport.io
+                buffer_remaining = len(buffer.buf) - buffer.pos
+                if buffer_remaining:
+                    # send next fragment
+                    data = tlsProtocol.transport.io.read(1000)
+                    flags = 0
+                    return EAPPEAPChallengeRequest(
+                        tlsProtocol, message.pkt, message.eap_id, 
+                        self.server.secret, flags = flags, data=data)
+                else:
+                    print "ACK but buffer is clear. WAT DO YOU WANT FROM ME?!"
 
         return EAPPEAPChallengeRequest(tlsProtocol,
-            message.pkt, message.eap_id, self.server.secret)
+            message.pkt, message.eap_id, self.server.secret, flags = TLSStart)
 
     def processEAPMessage(self, message):
         #print message
@@ -180,7 +225,7 @@ class EAPMessage(object):
     def createReplyPacket(self, type, data=''):
         "Build a reply packet for this message"
         reply = self.pkt.createReply(type)
-
+        self.eap_data = data
         reply.addAttribute('EAP-Message', self.encodeEAPMessage(data))
 
         return reply
@@ -229,7 +274,7 @@ class EAPMD5ChallengeRequest(EAPMessage):
         return self.createReplyPacket(packet.AccessChallenge, data_hdr + data)
 
 class EAPPEAPChallengeRequest(EAPMessage):
-    def __init__(self, proto, pkt, id, secret, data='\x20'):
+    def __init__(self, proto, pkt, id, secret, flags=0, exlen=0, data=''):
         self.eap_code = EAPRequest
         self.eap_type = EAPPEAP
         self.eap_id = id
@@ -239,11 +284,18 @@ class EAPPEAPChallengeRequest(EAPMessage):
         self.tlsProtocol = proto
 
         self.data = data
+        self.flags = flags
+        self.exlen = exlen
 
     def createPacket(self):
         "Create a PEAP challnge EAP message"
 
-        return self.createReplyPacket(packet.AccessChallenge, self.data)
+        if matchflag(self.flags, TLSLen):
+            data = struct.pack('!BL', self.flags, self.exlen) + self.data
+        else:
+            data = struct.pack('!B', self.flags) + self.data
+
+        return self.createReplyPacket(packet.AccessChallenge, data)
 
 class EAPSuccessReply(EAPMessage):
      def __init__(self, pkt, id, secret):

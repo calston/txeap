@@ -48,7 +48,6 @@ class StringTransport:
 
     # ITransport
     def write(self, data):
-        print "Transport got write", repr(data)
         if isinstance(data, unicode): # no, really, I mean it
             raise TypeError("Data must not be unicode")
         self.io.write(data)

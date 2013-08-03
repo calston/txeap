@@ -2,6 +2,7 @@ import struct
 import hashlib
 import hmac
 import uuid
+import math
 
 from txeap import dictionary
 
@@ -47,6 +48,11 @@ class RadiusPacket(object):
 
         if self.datagram:
             self.decodeDatagram()
+
+    def __str__(self):
+        return "<RadiusPacket keys=%s>" % (
+            repr(self.attributes)
+        )
 
     def getUserPassword(self, secret):
         """
@@ -114,9 +120,22 @@ class RadiusPacket(object):
             del self.attributes[name]
 
         self.addAttribute(key, value)
+
+    def splitValue(self, value):
+        # Split long values into a list
+        maxsize = 253
+        return [
+            value[i*maxsize:(i+1)*maxsize] 
+            for i in range(int(math.ceil(len(value)/float(maxsize))))]
         
     def addAttribute(self, key, value):
         "Add a attribute to this packet"
+
+        if len(value) > 253:
+            for v in self.splitValue(value):
+                self.addAttribute(key, v)
+
+            return
 
         if isinstance(key, int):
             # Store the raw attribute
