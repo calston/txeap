@@ -42,8 +42,17 @@ class EAPException(Exception):
     "EAP Exception"
 
 class EAPTLSProtocol(protocol.Protocol):
+    def __init__(self, state, protos):
+        # Link the protocol instance back to the state holder
+        protos[state][1] = self
+
     def dataReceived(self, bytes):
         print "EAPTLSProto <R< ", repr(bytes)
+
+    def connectionMade(self):
+        print "Connection made"
+
+        print self.transport
 
 class EAPProcessor(object):
     def __init__(self, server):
@@ -84,10 +93,10 @@ class EAPProcessor(object):
             return EAPMD5ChallengeRequest(
                 message.pkt, message.eap_id, self.server.secret)
 
-    def getEAPTLSTransport(self):
+    def getEAPTLSTransport(self, state):
         # Create a server factory
         serverFactory = protocol.ServerFactory()
-        serverFactory.protocol = EAPTLSProtocol
+        serverFactory.protocol = lambda : EAPTLSProtocol(state, self.peap_protocols)
 
         # Wrap it onto a context
         contextFactory = ssl.DefaultOpenSSLContextFactory(
@@ -106,13 +115,19 @@ class EAPProcessor(object):
         "Handle EAP-PEAP sessions"
 
         if state in self.peap_protocols:
-            tlsProtocol = self.peap_protocols[state]
+            tlsProtocol, tlsInput = self.peap_protocols[state]
         else:
             # XXX Invalidate this somehow
-            tlsProtocol = self.getEAPTLSTransport()
-            self.peap_protocols[state] = tlsProtocol
 
-        print "Proto object selected:", tlsProtocol
+            # Set the auth process state
+            self.auth_states[state][2] = 0
+            self.peap_protocols[state] = [None, None]
+            tlsProtocol = self.getEAPTLSTransport(state)
+            # Link the tlsProtocol, and extract the input protocol
+            self.peap_protocols[state][0] = tlsProtocol
+            tlsInput = self.peap_protocols[state][1]
+
+        print "Proto object selected:", tlsProtocol, tlsInput
 
         if ((message.eap_code == EAPResponse) and (message.eap_type == EAPPEAP)):
 
@@ -161,11 +176,23 @@ class EAPProcessor(object):
                         tlsProtocol, message.pkt, message.eap_id, 
                         self.server.secret, flags = flags, data=data)
                 else:
+                    self.auth_states[state][2] += 1 
                     buffer.truncate(0)
-                    print "ACK but buffer is clear. WAT DO YOU WANT FROM ME?!"
 
-        return EAPPEAPChallengeRequest(tlsProtocol,
-            message.pkt, message.eap_id, self.server.secret, flags = TLSStart)
+        auth_state = self.auth_states[state][2] 
+
+        print "Current state:", auth_state
+
+        if auth_state == 0:
+            return EAPPEAPChallengeRequest(tlsProtocol,
+                message.pkt, message.eap_id, self.server.secret, flags = TLSStart)
+
+        elif auth_state == 1:
+            buffer.truncate(0)
+            tlsInput.transport.write('Nonsense')
+            data = tlsProtocol.transport.value()
+            return EAPPEAPChallengeRequest(tlsProtocol,
+                message.pkt, message.eap_id, self.server.secret, data=data)
 
     def processEAPMessage(self, message):
         #print message
